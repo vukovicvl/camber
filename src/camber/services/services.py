@@ -1,0 +1,121 @@
+"""Application services - operations used by UI and the local API."""
+from __future__ import annotations
+import csv
+from datetime import datetime
+from typing import Iterable
+from sqlalchemy import select
+from ..storage.db import session, AssetRow, SensorRow, MeasurementRow, ThresholdRow
+from ..domain.models import Status, ThresholdRule
+
+
+class AssetService:
+    def __init__(self, engine):
+        self.engine = engine
+
+    def list_assets(self) -> list[dict]:
+        with session(self.engine) as s:
+            rows = s.execute(select(AssetRow)).scalars().all()
+            return [
+                {"id": r.id, "name": r.name, "type": r.type,
+                 "latitude": r.latitude, "longitude": r.longitude}
+                for r in rows
+            ]
+
+    def create_asset(self, name: str, type_: str,
+                     latitude: float | None = None,
+                     longitude: float | None = None) -> int:
+        with session(self.engine) as s:
+            row = AssetRow(name=name, type=type_, latitude=latitude, longitude=longitude)
+            s.add(row); s.commit(); s.refresh(row)
+            return row.id
+
+
+class SensorService:
+    def __init__(self, engine):
+        self.engine = engine
+
+    def list_for_asset(self, asset_id: int) -> list[dict]:
+        with session(self.engine) as s:
+            rows = s.execute(select(SensorRow).where(SensorRow.asset_id == asset_id)).scalars().all()
+            return [{"id": r.id, "asset_id": r.asset_id, "sensor_type": r.sensor_type,
+                     "serial_number": r.serial_number, "axis": r.axis} for r in rows]
+
+
+class MeasurementService:
+    def __init__(self, engine):
+        self.engine = engine
+
+    def for_sensor(self, sensor_id: int, limit: int = 1000) -> list[dict]:
+        with session(self.engine) as s:
+            rows = s.execute(
+                select(MeasurementRow)
+                .where(MeasurementRow.sensor_id == sensor_id)
+                .order_by(MeasurementRow.timestamp.desc())
+                .limit(limit)
+            ).scalars().all()
+            return [{"timestamp": r.timestamp.isoformat(), "metric_type": r.metric_type,
+                     "value": r.value, "unit": r.unit} for r in rows]
+
+
+class ImportService:
+    """CSV import. Expected columns: sensor_id,timestamp,metric_type,value,unit"""
+    def __init__(self, engine):
+        self.engine = engine
+
+    def import_csv(self, path: str) -> int:
+        count = 0
+        with session(self.engine) as s, open(path, newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                s.add(MeasurementRow(
+                    sensor_id=int(row["sensor_id"]),
+                    timestamp=datetime.fromisoformat(row["timestamp"]),
+                    metric_type=row["metric_type"],
+                    value=float(row["value"]),
+                    unit=row["unit"],
+                ))
+                count += 1
+            s.commit()
+        return count
+
+
+class StatusService:
+    """Evaluates current status from latest measurements + thresholds."""
+    def __init__(self, engine):
+        self.engine = engine
+
+    def _rules(self, s) -> dict[str, ThresholdRule]:
+        return {
+            r.metric_type: ThresholdRule(r.id, r.metric_type, r.warning_value, r.critical_value, r.unit)
+            for r in s.execute(select(ThresholdRow)).scalars().all()
+        }
+
+    def sensor_statuses(self) -> list[dict]:
+        with session(self.engine) as s:
+            rules = self._rules(s)
+            out = []
+            for sensor in s.execute(select(SensorRow)).scalars().all():
+                latest = s.execute(
+                    select(MeasurementRow)
+                    .where(MeasurementRow.sensor_id == sensor.id)
+                    .order_by(MeasurementRow.timestamp.desc())
+                    .limit(1)
+                ).scalar_one_or_none()
+                if not latest:
+                    status = Status.UNKNOWN
+                else:
+                    rule = rules.get(latest.metric_type)
+                    status = rule.evaluate(latest.value) if rule else Status.UNKNOWN
+                out.append({"sensor_id": sensor.id, "asset_id": sensor.asset_id,
+                            "status": status.value})
+            return out
+
+    def asset_statuses(self) -> list[dict]:
+        rank = {Status.UNKNOWN: 0, Status.OK: 1, Status.WARNING: 2, Status.CRITICAL: 3}
+        worst: dict[int, Status] = {}
+        for s in self.sensor_statuses():
+            cur = worst.get(s["asset_id"], Status.UNKNOWN)
+            new = Status(s["status"])
+            if rank[new] > rank[cur]:
+                worst[s["asset_id"]] = new
+        return [{"asset_id": k, "status": v.value} for k, v in worst.items()]

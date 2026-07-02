@@ -1,0 +1,30 @@
+Camber
+Copyright (c) 2026 Vladimir and the Camber contributors
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version. See the LICENSE file for the full text.
+
+--------------------------------------------------------------------------------
+THIRD-PARTY COMPONENTS
+--------------------------------------------------------------------------------
+
+This application bundles the following separately-licensed component:
+
+  camber-convert
+    License : MIT
+    Source  : https://github.com/vukovicvl/camber-convert
+    The full MIT license text for this component is included in
+    licenses/camber-convert-LICENSE.txt
+
+The MIT license is compatible with the GNU Affero General Public License v3.
+Combining the MIT-licensed camber-convert component with this AGPLv3 program
+is permitted; the combined work as distributed is governed by the AGPLv3, while
+the camber-convert component remains independently available under the MIT
+license from its own repository.
+
+Other third-party libraries used by this application (for example PySide6,
+SQLAlchemy, FastAPI, pyqtgraph, and pyarrow) are distributed under their own
+licenses. Include their license texts in the licenses/ directory of your
+packaged build as required by each.
