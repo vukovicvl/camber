@@ -4,11 +4,14 @@ import os
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QLabel,
     QPushButton, QFileDialog, QMessageBox, QTabWidget, QStatusBar,
-    QTableWidget, QTableWidgetItem, QHeaderView,
+    QTableWidget, QTableWidgetItem, QHeaderView, QDialog, QProgressDialog,
+    QApplication,
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon, QColor
 from ..services.services import AssetService, SensorService, StatusService, ImportService, MeasurementService
+from ..integrations import sensor_import
+from .import_dialog import ImportPreviewDialog
 from .theme import STYLESHEET, COLORS, STATUS_COLORS
 
 
@@ -44,6 +47,8 @@ class MainWindow(QMainWindow):
 
         self.setStyleSheet(STYLESHEET)
 
+        self.chart_panel = None  # set in _build_charts_tab when pyqtgraph is present
+
         tabs = QTabWidget()
         tabs.setDocumentMode(True)
         tabs.addTab(self._build_dashboard_tab(), "  Dashboard")
@@ -51,6 +56,11 @@ class MainWindow(QMainWindow):
         tabs.addTab(self._build_status_tab(), "  Status")
         tabs.addTab(self._build_charts_tab(), "  Charts")
         tabs.addTab(self._build_map_tab(), "  Map")
+        # Reload the chart's sensor list whenever the Charts tab is opened, so
+        # sensors created by an import (or via the ingest API) show up without
+        # restarting the app.
+        tabs.currentChanged.connect(self._on_tab_changed)
+        self.tabs = tabs
         self.setCentralWidget(tabs)
 
         sb = QStatusBar()
@@ -76,9 +86,17 @@ class MainWindow(QMainWindow):
         btn_refresh.clicked.connect(self.refresh_assets)
         top.addWidget(btn_refresh)
         btn_import = QPushButton("Import CSV")
-        btn_import.setObjectName("btnPrimary")
+        btn_import.setToolTip("Import a tidy measurements CSV "
+                              "(columns: sensor_id, timestamp, metric_type, value, unit) "
+                              "into existing sensors.")
         btn_import.clicked.connect(self.import_csv)
         top.addWidget(btn_import)
+        btn_sensor = QPushButton("Import sensor file…")
+        btn_sensor.setObjectName("btnPrimary")
+        btn_sensor.setToolTip("Import a raw sensor recording (wide multi-channel or tidy CSV). "
+                              "Auto-detects the layout and creates the asset and sensors.")
+        btn_sensor.clicked.connect(self.import_sensor_file)
+        top.addWidget(btn_sensor)
         layout.addLayout(top)
 
         self.asset_table = QTableWidget()
@@ -146,27 +164,38 @@ class MainWindow(QMainWindow):
 
     def _build_charts_tab(self) -> QWidget:
         try:
-            from ..charts.chart_panel import ChartPanel
-            return ChartPanel(self.engine)
+            import pyqtgraph  # noqa: F401  — probe the optional dep, not the panel module
         except ImportError:
-            w = QWidget()
-            lbl = QLabel("Chart panel requires pyqtgraph.\nInstall: pip install pyqtgraph")
-            lbl.setObjectName("labelMuted")
-            lbl.setAlignment(Qt.AlignCenter)
-            QVBoxLayout(w).addWidget(lbl)
-            return w
+            return self._placeholder_tab("Chart panel requires pyqtgraph.\nInstall: pip install pyqtgraph")
+        try:
+            from ..charts.chart_panel import ChartPanel
+            self.chart_panel = ChartPanel(self.engine)
+            return self.chart_panel
+        except Exception as e:
+            return self._placeholder_tab(f"Chart panel failed to load:\n{type(e).__name__}: {e}")
+
+    def _on_tab_changed(self, index: int):
+        if self.chart_panel is not None and self.tabs.tabText(index).strip() == "Charts":
+            self.chart_panel.reload_sensors()
 
     def _build_map_tab(self) -> QWidget:
         try:
+            from PySide6.QtWebEngineWidgets import QWebEngineView  # noqa: F401  — probe the optional dep
+        except ImportError:
+            return self._placeholder_tab("Map requires PySide6-Addons.\nInstall: pip install PySide6-Addons")
+        try:
             from ..mapping.map_panel import MapPanel
             return MapPanel(self.engine)
-        except ImportError:
-            w = QWidget()
-            lbl = QLabel("Map requires PySide6-Addons.\nInstall: pip install PySide6-Addons")
-            lbl.setObjectName("labelMuted")
-            lbl.setAlignment(Qt.AlignCenter)
-            QVBoxLayout(w).addWidget(lbl)
-            return w
+        except Exception as e:
+            return self._placeholder_tab(f"Map failed to load:\n{type(e).__name__}: {e}")
+
+    def _placeholder_tab(self, message: str) -> QWidget:
+        w = QWidget()
+        lbl = QLabel(message)
+        lbl.setObjectName("labelMuted")
+        lbl.setAlignment(Qt.AlignCenter)
+        QVBoxLayout(w).addWidget(lbl)
+        return w
 
     def import_csv(self):
         path, _ = QFileDialog.getOpenFileName(self, "Select CSV", "", "CSV Files (*.csv)")
@@ -177,4 +206,62 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Import Complete",
                                     f"Successfully imported {n} measurements.")
         except Exception as e:
-            QMessageBox.critical(self, "Import Failed", str(e))
+            hint = ""
+            # A KeyError here means a required tidy column (e.g. 'sensor_id') is
+            # absent -- typically because this is a raw sensor recording, not a
+            # tidy measurements CSV. Point the user at the right button.
+            if isinstance(e, KeyError) or "column" in str(e).lower():
+                hint = ("\n\nThis looks like a raw sensor recording rather than a tidy "
+                        "measurements CSV. Use “Import sensor file…”, which auto-detects "
+                        "the layout (including multi-channel exports) and creates the "
+                        "asset and sensors for you.")
+            QMessageBox.critical(self, "Import Failed", f"{e}{hint}")
+
+    def import_sensor_file(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select sensor recording", "",
+            "CSV Files (*.csv);;All Files (*)")
+        if not path:
+            return
+
+        try:
+            preview = sensor_import.inspect(path)
+        except Exception as e:
+            QMessageBox.critical(self, "Cannot read file", f"{type(e).__name__}: {e}")
+            return
+
+        dlg = ImportPreviewDialog(preview, self.assets_svc.list_assets(), self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        target_asset_id, new_asset_name = dlg.selected_target()
+
+        progress = QProgressDialog("Importing measurements…", "", 0, 0, self)
+        progress.setWindowTitle("Importing")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setCancelButton(None)
+        progress.setMinimumDuration(0)
+        progress.show()
+        QApplication.processEvents()
+
+        def on_progress(n: int):
+            progress.setLabelText(f"Importing measurements… {n:,} so far")
+            QApplication.processEvents()
+
+        try:
+            res = sensor_import.import_file(
+                self.engine, path, profile=preview.profile_name,
+                target_asset_id=target_asset_id, new_asset_name=new_asset_name,
+                progress=on_progress)
+        except Exception as e:
+            progress.close()
+            QMessageBox.critical(self, "Import Failed", f"{type(e).__name__}: {e}")
+            return
+
+        progress.close()
+        self.refresh_assets()
+        if self.chart_panel is not None:
+            self.chart_panel.reload_sensors()  # surface the new sensors in Charts
+        QMessageBox.information(
+            self, "Import Complete",
+            f"Imported {res.measurements_imported:,} measurements into "
+            f"“{res.asset_name}” across {res.sensors_created} sensor(s).")

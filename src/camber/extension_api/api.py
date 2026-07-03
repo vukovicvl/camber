@@ -2,10 +2,21 @@
 Bind to 127.0.0.1 only - this is a local IPC layer, not a public service.
 """
 from __future__ import annotations
+from datetime import datetime
 from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 from ..services.services import (
     AssetService, SensorService, MeasurementService, StatusService, ImportService,
 )
+
+
+class MeasurementIn(BaseModel):
+    """A live reading pushed in by a sensor gateway or simulator."""
+    sensor_id: int
+    value: float
+    metric_type: str
+    unit: str
+    timestamp: datetime | None = None
 
 
 def create_app(engine) -> FastAPI:
@@ -51,6 +62,19 @@ def create_app(engine) -> FastAPI:
         except FileNotFoundError:
             raise HTTPException(404, "CSV not found")
         return {"imported": n}
+
+    @app.post("/measurements")
+    def add_measurement(m: MeasurementIn):
+        """Live ingest: push a single reading. This is the endpoint a real
+        sensor gateway (or the demo feed) posts to; the live chart shows it."""
+        mid = meas.append(m.sensor_id, m.value, m.metric_type, m.unit, m.timestamp)
+        return {"id": mid}
+
+    @app.post("/measurements/batch")
+    def add_measurements(items: list[MeasurementIn]):
+        ids = [meas.append(m.sensor_id, m.value, m.metric_type, m.unit, m.timestamp)
+               for m in items]
+        return {"ingested": len(ids)}
 
     return app
 

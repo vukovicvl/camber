@@ -11,9 +11,11 @@ dependencies = [
   "fastapi>=0.110",
   "uvicorn>=0.29",
   "pyqtgraph>=0.13",
-  # camber-convert is added here when the converter is wired in (see AGENTS.md Task 1).
-  # Until it is published to PyPI, install it editable from the sibling repo:
-  #   pip install -e ../camber-convert
+  # Sensor-file import (wide/multi-channel + tidy CSV) goes through camber-convert.
+  # Its core is dependency-free (Parquet writing is the optional [parquet] extra,
+  # which the app does not need). Until it is published to PyPI, install it
+  # editable from the sibling repo:  pip install -e ../camber-convert
+  "camber-convert>=0.1",
 ]
 
 [project.scripts]

@@ -56,6 +56,35 @@ class MeasurementService:
             return [{"timestamp": r.timestamp.isoformat(), "metric_type": r.metric_type,
                      "value": r.value, "unit": r.unit} for r in rows]
 
+    def latest(self, sensor_id: int) -> dict | None:
+        """Most recent reading for a sensor, or None. Used by live charts to
+        continue naturally from wherever the sensor currently is."""
+        with session(self.engine) as s:
+            r = s.execute(
+                select(MeasurementRow)
+                .where(MeasurementRow.sensor_id == sensor_id)
+                .order_by(MeasurementRow.timestamp.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+            if r is None:
+                return None
+            return {"timestamp": r.timestamp, "metric_type": r.metric_type,
+                    "value": r.value, "unit": r.unit}
+
+    def append(self, sensor_id: int, value: float, metric_type: str, unit: str,
+               timestamp: datetime | None = None) -> int:
+        """Append one reading (the live-ingest path). Returns the new row id."""
+        with session(self.engine) as s:
+            row = MeasurementRow(
+                sensor_id=sensor_id,
+                timestamp=timestamp or datetime.utcnow(),
+                metric_type=metric_type, value=float(value), unit=unit,
+            )
+            s.add(row)
+            s.commit()
+            s.refresh(row)
+            return row.id
+
 
 class ImportService:
     """CSV import. Expected columns: sensor_id,timestamp,metric_type,value,unit"""
