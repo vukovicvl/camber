@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QLabel,
     QPushButton, QFileDialog, QMessageBox, QTabWidget, QStatusBar,
     QTableWidget, QTableWidgetItem, QHeaderView, QDialog, QProgressDialog,
-    QApplication,
+    QApplication, QInputDialog,
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon, QColor
@@ -82,6 +82,14 @@ class MainWindow(QMainWindow):
         title.setObjectName("labelHeader")
         top.addWidget(title)
         top.addStretch()
+        btn_rename = QPushButton("Rename")
+        btn_rename.setToolTip("Rename the selected asset.")
+        btn_rename.clicked.connect(self.rename_selected_asset)
+        top.addWidget(btn_rename)
+        btn_delete = QPushButton("Delete")
+        btn_delete.setToolTip("Delete the selected asset and all its sensors and measurements.")
+        btn_delete.clicked.connect(self.delete_selected_asset)
+        top.addWidget(btn_delete)
         btn_refresh = QPushButton("Refresh")
         btn_refresh.clicked.connect(self.refresh_assets)
         top.addWidget(btn_refresh)
@@ -119,6 +127,43 @@ class MainWindow(QMainWindow):
             self.asset_table.setItem(i, 2, QTableWidgetItem(a["type"]))
             self.asset_table.setItem(i, 3, QTableWidgetItem(str(a.get("latitude", ""))))
             self.asset_table.setItem(i, 4, QTableWidgetItem(str(a.get("longitude", ""))))
+
+    def _selected_asset(self) -> tuple[int, str] | None:
+        row = self.asset_table.currentRow()
+        if row < 0 or self.asset_table.item(row, 0) is None:
+            QMessageBox.information(self, "No selection", "Select an asset in the table first.")
+            return None
+        return int(self.asset_table.item(row, 0).text()), self.asset_table.item(row, 1).text()
+
+    def rename_selected_asset(self):
+        sel = self._selected_asset()
+        if sel is None:
+            return
+        asset_id, current = sel
+        name, ok = QInputDialog.getText(self, "Rename asset", "New name:", text=current)
+        if not ok or not name.strip():
+            return
+        self.assets_svc.rename_asset(asset_id, name.strip())
+        self.refresh_assets()
+        if self.chart_panel is not None:
+            self.chart_panel.reload_sensors()
+
+    def delete_selected_asset(self):
+        sel = self._selected_asset()
+        if sel is None:
+            return
+        asset_id, name = sel
+        confirm = QMessageBox.warning(
+            self, "Delete asset",
+            f"Delete “{name}” and ALL of its sensors and measurements?\n"
+            "This cannot be undone.",
+            QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel)
+        if confirm != QMessageBox.Yes:
+            return
+        self.assets_svc.delete_asset(asset_id)
+        self.refresh_assets()
+        if self.chart_panel is not None:
+            self.chart_panel.reload_sensors()
 
     def _build_status_tab(self) -> QWidget:
         w = QWidget()

@@ -82,6 +82,10 @@ class ChartPanel(QWidget):
         self.plot.setLabel("left", "Value")
         self.plot.getAxis("bottom").setPen(pg.mkPen(COLORS["border"], width=1))
         self.plot.getAxis("left").setPen(pg.mkPen(COLORS["border"], width=1))
+        # Keep big recordings (tens of thousands of points) responsive: draw only
+        # what is in view and downsample the rest.
+        self.plot.setClipToView(True)
+        self.plot.setDownsampling(mode="peak", auto=True)
         layout.addWidget(self.plot)
 
         # Timers: one drives the live re-query, one drives the demo feed.
@@ -147,22 +151,39 @@ class ChartPanel(QWidget):
         value = base + amp * math.sin(time.time() * 1.5) + random.uniform(-0.3, 0.3) * amp
         self.meas_svc.append(sensor_id, value, metric, unit, datetime.utcnow())
 
+    # ---- pause background work when this tab isn't visible ---------------- #
+    def hideEvent(self, event):
+        self.live_timer.stop()
+        self.demo_timer.stop()
+        super().hideEvent(event)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self.live_check.isChecked():
+            self.live_timer.start()
+        if self.demo_btn.isChecked():
+            self.demo_timer.start()
+
     # ---- plotting -------------------------------------------------------- #
     def _load_points(self, sensor_id: int, live: bool):
         with session(self.engine) as s:
-            q = select(MeasurementRow).where(MeasurementRow.sensor_id == sensor_id)
+            # Select just the columns we plot (not full ORM rows) — a full
+            # recording is tens of thousands of points and building ORM objects
+            # for each is the main cost of switching/selecting.
+            q = select(MeasurementRow.timestamp, MeasurementRow.value,
+                       MeasurementRow.metric_type, MeasurementRow.unit
+                       ).where(MeasurementRow.sensor_id == sensor_id)
             if live:
-                # newest N, then chronological for plotting
                 rows = list(reversed(s.execute(
                     q.order_by(MeasurementRow.timestamp.desc()).limit(LIVE_WINDOW_POINTS)
-                ).scalars().all()))
+                ).all()))
             else:
-                rows = s.execute(q.order_by(MeasurementRow.timestamp.asc())).scalars().all()
+                rows = s.execute(q.order_by(MeasurementRow.timestamp.asc())).all()
             if not rows:
                 return None
-            xs = [r.timestamp.timestamp() for r in rows]
-            ys = [r.value for r in rows]
-            metric, unit = rows[0].metric_type, rows[0].unit
+            xs = [r[0].timestamp() for r in rows]
+            ys = [r[1] for r in rows]
+            metric, unit = rows[0][2], rows[0][3]
             rule = s.execute(
                 select(ThresholdRow).where(ThresholdRow.metric_type == metric)
             ).scalar_one_or_none()
