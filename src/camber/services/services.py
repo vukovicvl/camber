@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 from datetime import datetime
 from typing import Iterable
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from ..storage.db import session, AssetRow, SensorRow, MeasurementRow, ThresholdRow
 from ..domain.models import Status, ThresholdRule
 
@@ -28,6 +28,31 @@ class AssetService:
             row = AssetRow(name=name, type=type_, latitude=latitude, longitude=longitude)
             s.add(row); s.commit(); s.refresh(row)
             return row.id
+
+    def rename_asset(self, asset_id: int, name: str) -> bool:
+        with session(self.engine) as s:
+            row = s.get(AssetRow, asset_id)
+            if row is None:
+                return False
+            row.name = name
+            s.commit()
+            return True
+
+    def delete_asset(self, asset_id: int) -> bool:
+        """Delete an asset and everything under it. Uses bulk Core deletes rather
+        than ORM cascade so removing an asset with millions of measurements is
+        fast and doesn't materialise them all."""
+        with session(self.engine) as s:
+            if s.get(AssetRow, asset_id) is None:
+                return False
+            sensor_ids = [sid for (sid,) in s.execute(
+                select(SensorRow.id).where(SensorRow.asset_id == asset_id)).all()]
+            if sensor_ids:
+                s.execute(delete(MeasurementRow).where(MeasurementRow.sensor_id.in_(sensor_ids)))
+                s.execute(delete(SensorRow).where(SensorRow.asset_id == asset_id))
+            s.execute(delete(AssetRow).where(AssetRow.id == asset_id))
+            s.commit()
+            return True
 
 
 class SensorService:
