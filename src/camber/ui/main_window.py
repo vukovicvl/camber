@@ -7,8 +7,8 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QDialog, QProgressDialog,
     QApplication, QInputDialog,
 )
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QIcon, QColor
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QIcon, QColor, QDesktopServices
 from ..services.services import AssetService, SensorService, StatusService, ImportService, MeasurementService
 from ..integrations import sensor_import
 from .import_dialog import ImportPreviewDialog
@@ -47,7 +47,8 @@ class MainWindow(QMainWindow):
 
         self.setStyleSheet(STYLESHEET)
 
-        self.chart_panel = None  # set in _build_charts_tab when pyqtgraph is present
+        self.chart_panel = None     # set in _build_charts_tab when pyqtgraph is present
+        self.analysis_panel = None  # set in _build_analysis_tab when numpy+pyqtgraph present
 
         tabs = QTabWidget()
         tabs.setDocumentMode(True)
@@ -55,13 +56,14 @@ class MainWindow(QMainWindow):
         tabs.addTab(self._build_assets_tab(), "  Assets")
         tabs.addTab(self._build_status_tab(), "  Status")
         tabs.addTab(self._build_charts_tab(), "  Charts")
+        tabs.addTab(self._build_analysis_tab(), "  Analysis")
         tabs.addTab(self._build_map_tab(), "  Map")
-        # Reload the chart's sensor list whenever the Charts tab is opened, so
-        # sensors created by an import (or via the ingest API) show up without
-        # restarting the app.
+        # Reload a panel's sensor list whenever its tab is opened, so sensors
+        # created by an import (or via the ingest API) show up without a restart.
         tabs.currentChanged.connect(self._on_tab_changed)
         self.tabs = tabs
         self.setCentralWidget(tabs)
+        self._build_menu()
 
         sb = QStatusBar()
         sb.showMessage("  Camber v0.1.0  |  API: 127.0.0.1:8765")
@@ -219,9 +221,78 @@ class MainWindow(QMainWindow):
         except Exception as e:
             return self._placeholder_tab(f"Chart panel failed to load:\n{type(e).__name__}: {e}")
 
+    def _build_analysis_tab(self) -> QWidget:
+        try:
+            import numpy  # noqa: F401
+            import pyqtgraph  # noqa: F401
+        except ImportError:
+            return self._placeholder_tab("Analysis requires numpy + pyqtgraph.\n"
+                                         "Install: pip install numpy pyqtgraph")
+        try:
+            from ..charts.analysis_panel import AnalysisPanel
+            self.analysis_panel = AnalysisPanel(self.engine)
+            return self.analysis_panel
+        except Exception as e:
+            return self._placeholder_tab(f"Analysis failed to load:\n{type(e).__name__}: {e}")
+
     def _on_tab_changed(self, index: int):
-        if self.chart_panel is not None and self.tabs.tabText(index).strip() == "Charts":
+        name = self.tabs.tabText(index).strip()
+        if self.chart_panel is not None and name == "Charts":
             self.chart_panel.reload_sensors()
+        elif self.analysis_panel is not None and name == "Analysis":
+            self.analysis_panel.reload_sensors()
+
+    # ---- menu bar + Help/feedback actions -------------------------------- #
+    def _build_menu(self):
+        bar = self.menuBar()
+        m_data = bar.addMenu("&Data")
+        m_data.addAction("Load sample data", self.load_sample_data)
+
+        m_help = bar.addMenu("&Help")
+        m_help.addAction("View logs folder", self.open_logs)
+        m_help.addAction("Report an issue…", self.report_issue)
+        m_help.addAction("About Camber", self.show_about)
+
+    def load_sample_data(self):
+        from pathlib import Path
+        sample = (Path(__file__).resolve().parents[1] / "resources" / "sample"
+                  / "vanersborg_sample.csv")
+        if not sample.exists():
+            QMessageBox.warning(self, "Sample not found",
+                                f"Bundled sample file is missing:\n{sample}")
+            return
+        try:
+            res = sensor_import.import_file(self.engine, str(sample),
+                                            new_asset_name="Vänersborg Bridge (sample)")
+        except Exception as e:
+            QMessageBox.critical(self, "Could not load sample", f"{type(e).__name__}: {e}")
+            return
+        self.refresh_assets()
+        if self.chart_panel is not None:
+            self.chart_panel.reload_sensors()
+        if self.analysis_panel is not None:
+            self.analysis_panel.reload_sensors()
+        QMessageBox.information(
+            self, "Sample loaded",
+            f"Loaded {res.measurements_imported:,} sample readings across "
+            f"{res.sensors_created} sensors into “{res.asset_name}”.\n\n"
+            "Try the Charts tab (toggle Live), or the Analysis tab for the "
+            "FFT / spectrogram of an accelerometer (A1–A5).")
+
+    def open_logs(self):
+        from ..logging_setup import log_dir
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(log_dir())))
+
+    def report_issue(self):
+        QDesktopServices.openUrl(QUrl("https://github.com/vukovicvl/camber/issues/new"))
+
+    def show_about(self):
+        from ..logging_setup import log_file
+        QMessageBox.about(
+            self, "About Camber",
+            "<b>Camber</b> — open structural health monitoring platform.<br>"
+            "Version 0.1.0<br>Local API: http://127.0.0.1:8765<br><br>"
+            f"Logs: {log_file()}")
 
     def _build_map_tab(self) -> QWidget:
         try:

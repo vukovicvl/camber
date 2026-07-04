@@ -13,14 +13,21 @@ management, monitoring, and data handling — as open, vendor-neutral software.
 > Camber was previously called **BridgeQ**.
 
 ## Features
-- Asset & sensor management (full CRUD)
-- Measurement ingestion (CSV, two-phase atomic import with an import log)
+- Asset & sensor management (full CRUD; rename / delete)
+- **Sensor-file import** — tidy *and* wide/multi-channel CSV, auto-detected and
+  locale-robust, with a preview before writing (via `camber-convert`)
 - Threshold evaluation & status
-- Time-series charts (pyqtgraph)
+- Time-series charts with a **Live** mode + `POST /measurements` ingest API
+- **Frequency analysis** — FFT amplitude spectrum + spectrogram (numpy)
+- Built-in sample dataset (**Data ▸ Load sample data**) so first run just works
 - Map view (QtWebEngine + Leaflet)
 - Local SQLite storage, multi-project database switching
 - CSV / XLSX / PDF export
 - Local HTTP extension API on `127.0.0.1:8765`
+- Rotating error log + crash-safe exception handling (**Help ▸ View logs**)
+
+See **[docs/ROADMAP.md](docs/ROADMAP.md)** for the honest take on data-scale
+limits and the path to production (storage, streaming, analysis depth).
 
 ## Quickstart
 ```powershell
