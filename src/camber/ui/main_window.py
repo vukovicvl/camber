@@ -1,6 +1,7 @@
 """Camber — main desktop window with dark monitoring theme."""
 from __future__ import annotations
 import os
+import sys
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QLabel,
     QPushButton, QFileDialog, QMessageBox, QTabWidget, QStatusBar,
@@ -16,14 +17,22 @@ from .theme import STYLESHEET, COLORS, STATUS_COLORS
 
 
 def _icon_path():
+    """Locate the window icon in both a source checkout and the frozen build.
+
+    Under PyInstaller (onedir) the bundled data sits at the _MEIPASS (_internal)
+    root, so the source-tree "../../../" walk overshoots and the window/taskbar
+    icon silently goes missing. Search _MEIPASS first when frozen, then fall back
+    to the repo root (three levels up from src/camber/ui)."""
     d = os.path.dirname(os.path.abspath(__file__))
-    for candidate in [
-        os.path.join(d, "..", "..", "..", "camber_icon.png"),
-        os.path.join(d, "..", "..", "..", "camber_icon.ico"),
-    ]:
-        p = os.path.normpath(candidate)
-        if os.path.exists(p):
-            return p
+    bases = []
+    if getattr(sys, "frozen", False):
+        bases.append(getattr(sys, "_MEIPASS", d))
+    bases.append(os.path.normpath(os.path.join(d, "..", "..", "..")))
+    for base in bases:
+        for name in ("camber_icon.png", "camber_icon.ico"):
+            p = os.path.join(base, name)
+            if os.path.exists(p):
+                return p
     return None
 
 

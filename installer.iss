@@ -18,7 +18,7 @@ DefaultGroupName=Camber
 OutputDir=installer
 OutputBaseFilename=Camber_Setup
 SetupIconFile=camber_icon.ico
-UninstallDisplayIcon={app}\camber_icon.ico
+UninstallDisplayIcon={app}\Camber.exe
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -35,8 +35,8 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Source: "dist\Camber\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 
 [Icons]
-Name: "{group}\Camber"; Filename: "{app}\Camber.exe"; IconFilename: "{app}\camber_icon.ico"
-Name: "{autodesktop}\Camber"; Filename: "{app}\Camber.exe"; IconFilename: "{app}\camber_icon.ico"; Tasks: desktopicon
+Name: "{group}\Camber"; Filename: "{app}\Camber.exe"
+Name: "{autodesktop}\Camber"; Filename: "{app}\Camber.exe"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "Create desktop shortcut"; GroupDescription: "Additional shortcuts:"
