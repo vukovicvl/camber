@@ -81,4 +81,10 @@ def create_app(engine) -> FastAPI:
 
 def serve(engine, host: str = "127.0.0.1", port: int = 8765):
     import uvicorn
-    uvicorn.run(create_app(engine), host=host, port=port, log_level="info")
+    # log_config=None: don't let uvicorn install its own dict-config logging. Its
+    # default colour formatter calls sys.stdout.isatty() at construction, which
+    # crashes in a windowed (console=False) build where sys.stdout is None. With
+    # None, uvicorn's records propagate to the root logger we already configured,
+    # so its logs land in camber.log too.
+    uvicorn.run(create_app(engine), host=host, port=port, log_level="info",
+                log_config=None)

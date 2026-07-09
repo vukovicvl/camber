@@ -37,7 +37,20 @@ def _fatal_startup_error(message: str):
         print(f"Camber startup error: {message}", file=sys.stderr)
 
 
+def _ensure_std_streams():
+    """In a windowed PyInstaller build (console=False) sys.stdout/stderr are None;
+    any library that touches them (uvicorn's colour log formatter, a stray print)
+    then crashes. Point them at the null device so those paths are always safe."""
+    for name in ("stdout", "stderr"):
+        if getattr(sys, name, None) is None:
+            try:
+                setattr(sys, name, open(os.devnull, "w"))
+            except OSError:
+                pass
+
+
 def main():
+    _ensure_std_streams()
     logfile = setup_logging()
     # Install crash-safety hooks BEFORE any risky startup work so failures in
     # setup/init/API-thread are logged (dialog is added once the GUI exists).
