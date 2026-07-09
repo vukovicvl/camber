@@ -181,8 +181,20 @@ class ChartPanel(QWidget):
                 rows = s.execute(q.order_by(MeasurementRow.timestamp.asc())).all()
             if not rows:
                 return None
-            xs = [r[0].timestamp() for r in rows]
-            ys = [r[1] for r in rows]
+            # datetime.timestamp() calls the platform mktime, which on Windows
+            # raises OSError for out-of-range dates (pre-1970 / epoch-zero in a
+            # positive-UTC zone / far future). Skip such rows rather than letting
+            # the exception escape into the Qt slot and crash the tab.
+            xs, ys = [], []
+            for r in rows:
+                try:
+                    t = r[0].timestamp()
+                except (OSError, OverflowError, ValueError):
+                    continue
+                xs.append(t)
+                ys.append(r[1])
+            if not xs:
+                return None
             metric, unit = rows[0][2], rows[0][3]
             rule = s.execute(
                 select(ThresholdRow).where(ThresholdRow.metric_type == metric)

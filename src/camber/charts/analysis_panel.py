@@ -104,9 +104,20 @@ class AnalysisPanel(QWidget):
         if not rows:
             return None, None
         rows = rows[::-1]  # back to chronological
-        ts = np.array([r[0].timestamp() for r in rows], dtype=float)
-        y = np.array([r[1] for r in rows], dtype=float)
-        return ts, y
+        # datetime.timestamp() raises OSError on Windows for out-of-range dates
+        # (pre-1970 / epoch-zero in a positive-UTC zone / far future); skip those
+        # rows so the Analysis tab degrades gracefully instead of crashing.
+        tvals, yvals = [], []
+        for r in rows:
+            try:
+                t = r[0].timestamp()
+            except (OSError, OverflowError, ValueError):
+                continue
+            tvals.append(t)
+            yvals.append(r[1])
+        if not tvals:
+            return None, None
+        return np.array(tvals, dtype=float), np.array(yvals, dtype=float)
 
     @staticmethod
     def _estimate_fs(ts: np.ndarray) -> float | None:
