@@ -1,5 +1,6 @@
 """Pure business entities. No I/O, no framework dependencies."""
 from __future__ import annotations
+import math
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -51,6 +52,11 @@ class ThresholdRule:
     unit: str
 
     def evaluate(self, value: float) -> Status:
+        # A NaN/inf reading (dropped sample, division overflow) must not be read
+        # as healthy: every comparison against NaN is False, which would return
+        # OK. Treat non-finite as UNKNOWN so a dead/garbage channel isn't green.
+        if value is None or not math.isfinite(value):
+            return Status.UNKNOWN
         if value >= self.critical_value:
             return Status.CRITICAL
         if value >= self.warning_value:

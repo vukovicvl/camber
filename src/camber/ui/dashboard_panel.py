@@ -2,7 +2,7 @@
 from __future__ import annotations
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGridLayout, QFrame,
-    QSizePolicy,
+    QSizePolicy, QScrollArea,
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPainter, QColor, QPen, QFont
@@ -170,11 +170,17 @@ class DashboardPanel(QWidget):
                                   f"font-weight: bold; letter-spacing: 1px; padding-top: 4px;")
         main.addWidget(list_header)
 
-        # Scrollable asset rows
-        self.asset_list_layout = QVBoxLayout()
+        # Scrollable asset rows — a QScrollArea so many assets stay reachable
+        # instead of being squeezed/clipped by a bare layout.
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        container = QWidget()
+        self.asset_list_layout = QVBoxLayout(container)
+        self.asset_list_layout.setContentsMargins(0, 0, 0, 0)
         self.asset_list_layout.setSpacing(4)
-        main.addLayout(self.asset_list_layout)
-        main.addStretch()
+        scroll.setWidget(container)
+        main.addWidget(scroll, 1)
 
     def refresh(self):
         from datetime import datetime
@@ -203,7 +209,7 @@ class DashboardPanel(QWidget):
         self.card_warn.set_value(str(n_warn), accent=COLORS["warning"])
         self.card_crit.set_value(str(n_crit), accent=COLORS["critical"])
 
-        # Rebuild asset rows
+        # Rebuild asset rows (clear old rows + any trailing stretch)
         while self.asset_list_layout.count():
             item = self.asset_list_layout.takeAt(0)
             if item.widget():
@@ -212,3 +218,4 @@ class DashboardPanel(QWidget):
         for a in asset_data:
             row = AssetStatusRow(a["name"], a["type"], a["status"], a["sensors"])
             self.asset_list_layout.addWidget(row)
+        self.asset_list_layout.addStretch()  # keep rows top-aligned in the scroll area

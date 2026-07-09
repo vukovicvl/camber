@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from datetime import datetime
 from pathlib import Path
-from sqlalchemy import create_engine, ForeignKey, String, Float, DateTime, Integer, JSON
+from sqlalchemy import create_engine, event, ForeignKey, String, Float, DateTime, Integer, JSON
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, Session
 
 
@@ -81,6 +81,16 @@ def default_db_path() -> str:
 
 def init_db(db_path: str = "camber.db"):
     engine = create_engine(f"sqlite:///{db_path}", future=True)
+
+    @event.listens_for(engine, "connect")
+    def _sqlite_pragmas(dbapi_conn, _rec):  # pragma: no cover - exercised at runtime
+        # Wait instead of immediately failing with "database is locked" when the
+        # UI (demo feed / dashboard timer) and a long import or the API thread
+        # touch the DB at the same moment.
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA busy_timeout=10000")
+        cur.close()
+
     Base.metadata.create_all(engine)
     return engine
 

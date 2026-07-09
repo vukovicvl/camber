@@ -13,11 +13,12 @@ Camber's schema is app code.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from datetime import timezone
 from pathlib import Path
 
-from sqlalchemy import insert, text
+from sqlalchemy import insert, select, text
 
 from ..storage.db import AssetRow, MeasurementRow, SensorRow, session
 
@@ -111,11 +112,17 @@ def import_file(engine, path: str, profile=None, *,
             s.execute(text("PRAGMA synchronous=OFF"))
             s.execute(text("PRAGMA temp_store=MEMORY"))
 
+        existing: dict[str, int] = {}
         if target_asset_id is not None:
             asset = s.get(AssetRow, target_asset_id)
             if asset is None:
                 raise ValueError(f"asset {target_asset_id} not found")
             asset_id, asset_name = asset.id, asset.name
+            # Re-importing another recording of the same bridge should feed the
+            # same sensors, not duplicate them (serial_number has no UNIQUE
+            # constraint, so nothing else stops it). Reuse by serial.
+            existing = {sr.serial_number: sr.id for sr in s.execute(
+                select(SensorRow).where(SensorRow.asset_id == asset_id)).scalars()}
         else:
             asset = AssetRow(name=new_asset_name or info.asset.name,
                              type=info.asset.type or "bridge")
@@ -124,17 +131,26 @@ def import_file(engine, path: str, profile=None, *,
             asset_id, asset_name = asset.id, asset.name
 
         # One SensorRow per channel; map camber-convert's string id -> db int id.
+        # Reuse an existing sensor with the same serial when importing into an
+        # existing asset.
         sid_map: dict[str, int] = {}
+        sensors_created = 0
         for sensor in info.sensors:
+            serial = (sensor.serial_number or sensor.id)[:100]
+            if serial in existing:
+                sid_map[sensor.id] = existing[serial]
+                continue
             row = SensorRow(
                 asset_id=asset_id,
                 sensor_type=(sensor.sensor_type or "unknown")[:100],
-                serial_number=(sensor.serial_number or sensor.id)[:100],
+                serial_number=serial,
                 axis=(sensor.axis or None),
             )
             s.add(row)
             s.flush()
             sid_map[sensor.id] = row.id
+            existing[serial] = row.id
+            sensors_created += 1
 
         # Core table insert (not the ORM class) is ~1.5x faster here: it skips
         # per-row ORM machinery while still going through SQLAlchemy's type
@@ -145,6 +161,11 @@ def import_file(engine, path: str, profile=None, *,
         for m in bc.stream_measurements(path, profile=stream_profile, user_dir=PROFILES_DIR):
             db_sid = sid_map.get(m.sensor_id)
             if db_sid is None:
+                continue
+            # SQLite stores a float NaN as NULL, which violates the NOT NULL value
+            # column and would abort the whole batch on one bad cell. Drop non-finite
+            # readings (dropped samples / overflow) instead.
+            if m.value is None or not math.isfinite(m.value):
                 continue
             buf.append({
                 "sensor_id": db_sid,
@@ -165,6 +186,13 @@ def import_file(engine, path: str, profile=None, *,
             if progress:
                 progress(count)
 
+        if count == 0:
+            # Nothing parsed -> don't commit phantom zero-row sensors or report a
+            # misleading "imported 0" success. Raising rolls back the asset/sensors.
+            raise ValueError(
+                "No readings were parsed from the file — it may be empty, all "
+                "no-data/sentinel values, or an unrecognised layout.")
+
         s.commit()
 
         if is_sqlite:  # restore default durability for the pooled connection
@@ -174,4 +202,4 @@ def import_file(engine, path: str, profile=None, *,
                 pass
 
     return ImportResult(asset_id=asset_id, asset_name=asset_name,
-                        sensors_created=len(sid_map), measurements_imported=count)
+                        sensors_created=sensors_created, measurements_imported=count)

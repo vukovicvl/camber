@@ -68,12 +68,17 @@ def create_app(engine) -> FastAPI:
         """Live ingest: push a single reading. This is the endpoint a real
         sensor gateway (or the demo feed) posts to; the live chart shows it."""
         mid = meas.append(m.sensor_id, m.value, m.metric_type, m.unit, m.timestamp)
+        if mid is None:  # non-finite value (JSON allows NaN/Infinity) — reject cleanly
+            raise HTTPException(422, "value must be a finite number")
         return {"id": mid}
 
     @app.post("/measurements/batch")
     def add_measurements(items: list[MeasurementIn]):
-        ids = [meas.append(m.sensor_id, m.value, m.metric_type, m.unit, m.timestamp)
-               for m in items]
+        # Non-finite readings are dropped (append returns None) rather than
+        # failing the whole batch; report how many were actually stored.
+        ids = [mid for m in items
+               if (mid := meas.append(m.sensor_id, m.value, m.metric_type, m.unit,
+                                      m.timestamp)) is not None]
         return {"ingested": len(ids)}
 
     return app

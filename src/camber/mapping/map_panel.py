@@ -1,10 +1,11 @@
 """Map panel — dark Leaflet tiles with status markers."""
 from __future__ import annotations
 import json
+import math
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QPushButton, QHBoxLayout, QLabel
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from ..services.services import AssetService, StatusService
-from .theme import COLORS
+from ..ui.theme import COLORS
 
 HTML_TEMPLATE = """<!doctype html>
 <html><head><meta charset="utf-8">
@@ -28,17 +29,26 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{
   attribution:'CartoDB',maxZoom:19
 }).addTo(map);
 const bounds=[];
+const esc=s=>String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 assets.forEach(a=>{
-  if(a.latitude==null||a.longitude==null)return;
+  if(a.latitude==null||a.longitude==null||!isFinite(a.latitude)||!isFinite(a.longitude))return;
   const c=colors[a.status]||colors.unknown;
   L.circleMarker([a.latitude,a.longitude],{
     radius:10,color:c,weight:2,fillColor:c,fillOpacity:0.3
-  }).bindPopup(`<div class="popup-name">${a.name}</div>
-    <div>${a.type}</div>
-    <div class="popup-status" style="color:${c}">${a.status}</div>`).addTo(map);
+  }).bindPopup(`<div class="popup-name">${esc(a.name)}</div>
+    <div>${esc(a.type)}</div>
+    <div class="popup-status" style="color:${c}">${esc(a.status)}</div>`).addTo(map);
   bounds.push([a.latitude,a.longitude]);
 });
-if(bounds.length)map.fitBounds(bounds,{padding:[50,50]});
+if(bounds.length){map.fitBounds(bounds,{padding:[50,50]});}
+else{
+  const d=document.createElement('div');
+  d.style.cssText='position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:1000;'
+    +'background:#1C2333;color:#E6EDF3;border:1px solid #30363D;border-radius:6px;'
+    +'padding:8px 14px;font:12px Segoe UI,sans-serif';
+  d.textContent=assets.length?'No coordinates set for these assets yet.':'No assets yet.';
+  document.body.appendChild(d);
+}
 </script></body></html>"""
 
 
@@ -72,5 +82,14 @@ class MapPanel(QWidget):
         statuses = {s["asset_id"]: s["status"] for s in self.status_svc.asset_statuses()}
         for a in assets:
             a["status"] = statuses.get(a["id"], "unknown")
-        html = HTML_TEMPLATE.replace("__ASSETS__", json.dumps(assets))
+            # Non-finite coordinates serialise to bare NaN/Infinity (invalid JSON,
+            # and would reach L.circleMarker([NaN,...])); drop them to null.
+            for k in ("latitude", "longitude"):
+                v = a.get(k)
+                if not isinstance(v, (int, float)) or not math.isfinite(v):
+                    a[k] = None
+        # "</" -> "<\/" so an asset name containing "</script>" can't close the
+        # inline <script> block and blank the map.
+        payload = json.dumps(assets).replace("</", "<\\/")
+        html = HTML_TEMPLATE.replace("__ASSETS__", payload)
         self.view.setHtml(html)

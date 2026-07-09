@@ -1,6 +1,7 @@
 """Application services - operations used by UI and the local API."""
 from __future__ import annotations
 import csv
+import math
 from datetime import datetime
 from typing import Iterable
 from sqlalchemy import select, delete
@@ -97,13 +98,23 @@ class MeasurementService:
                     "value": r.value, "unit": r.unit}
 
     def append(self, sensor_id: int, value: float, metric_type: str, unit: str,
-               timestamp: datetime | None = None) -> int:
-        """Append one reading (the live-ingest path). Returns the new row id."""
+               timestamp: datetime | None = None) -> int | None:
+        """Append one reading (the live-ingest path). Returns the new row id, or
+        None if the value is non-finite. SQLite stores a float NaN as NULL, which
+        violates the NOT NULL value column and would abort the insert; a NaN/inf
+        reading is also meaningless, so it is dropped rather than raised (the demo
+        feed and API both call this)."""
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(v):
+            return None
         with session(self.engine) as s:
             row = MeasurementRow(
                 sensor_id=sensor_id,
                 timestamp=timestamp or datetime.utcnow(),
-                metric_type=metric_type, value=float(value), unit=unit,
+                metric_type=metric_type, value=v, unit=unit,
             )
             s.add(row)
             s.commit()
@@ -116,19 +127,40 @@ class ImportService:
     def __init__(self, engine):
         self.engine = engine
 
+    REQUIRED = ("sensor_id", "timestamp", "metric_type", "value", "unit")
+
     def import_csv(self, path: str) -> int:
-        count = 0
+        """Import a tidy measurements CSV into existing sensors. Returns the number
+        of rows imported. Rejects an empty / header-less / data-less file, and
+        skips rows that can't be parsed, are non-finite, or reference a sensor_id
+        that doesn't exist (SQLite has no FK enforcement, so those would otherwise
+        be committed as invisible orphan rows) rather than aborting the whole import
+        or reporting false success."""
+        count = rows = 0
         with session(self.engine) as s, open(path, newline="") as f:
             reader = csv.DictReader(f)
+            if not reader.fieldnames:
+                raise ValueError("CSV is empty or has no header row.")
+            missing = [c for c in self.REQUIRED if c not in reader.fieldnames]
+            if missing:
+                raise KeyError(f"CSV is missing required column(s): {', '.join(missing)}")
+            known = {sid for (sid,) in s.execute(select(SensorRow.id)).all()}
             for row in reader:
-                s.add(MeasurementRow(
-                    sensor_id=int(row["sensor_id"]),
-                    timestamp=datetime.fromisoformat(row["timestamp"]),
-                    metric_type=row["metric_type"],
-                    value=float(row["value"]),
-                    unit=row["unit"],
-                ))
+                rows += 1
+                try:
+                    sid = int(row["sensor_id"])
+                    val = float(row["value"])
+                    ts = datetime.fromisoformat(row["timestamp"])
+                except (TypeError, ValueError):
+                    continue  # unparseable cell — skip this row
+                if sid not in known or not math.isfinite(val):
+                    continue  # orphan sensor_id or NaN/inf value — skip
+                s.add(MeasurementRow(sensor_id=sid, timestamp=ts,
+                                     metric_type=row["metric_type"], value=val,
+                                     unit=row["unit"]))
                 count += 1
+            if rows == 0:
+                raise ValueError("CSV has a header but no data rows.")
             s.commit()
         return count
 

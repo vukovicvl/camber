@@ -12,6 +12,8 @@ windowed numpy.fft over overlapping segments.
 """
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import QRectF, Qt
@@ -106,15 +108,19 @@ class AnalysisPanel(QWidget):
         rows = rows[::-1]  # back to chronological
         # datetime.timestamp() raises OSError on Windows for out-of-range dates
         # (pre-1970 / epoch-zero in a positive-UTC zone / far future); skip those
-        # rows so the Analysis tab degrades gracefully instead of crashing.
+        # rows so the Analysis tab degrades gracefully instead of crashing. Also
+        # drop non-finite values (NaN/inf) that would poison the FFT.
         tvals, yvals = [], []
         for r in rows:
+            v = r[1]
+            if v is None or not math.isfinite(v):
+                continue
             try:
                 t = r[0].timestamp()
             except (OSError, OverflowError, ValueError):
                 continue
             tvals.append(t)
-            yvals.append(r[1])
+            yvals.append(v)
         if not tvals:
             return None, None
         return np.array(tvals, dtype=float), np.array(yvals, dtype=float)
@@ -124,9 +130,15 @@ class AnalysisPanel(QWidget):
         if ts.size < 2:
             return None
         dt = np.median(np.diff(ts))
-        if not np.isfinite(dt) or dt <= 0:
-            return None
-        return 1.0 / dt
+        if np.isfinite(dt) and dt > 0:
+            return 1.0 / dt
+        # Timestamps quantised coarser than the sample rate (e.g. whole-second
+        # stamps on faster data) give a median step of 0. Fall back to the
+        # average rate over the whole record so the spectrum is still usable.
+        span = float(ts[-1] - ts[0])
+        if np.isfinite(span) and span > 0:
+            return (ts.size - 1) / span
+        return None
 
     def analyse(self):
         sensor_id = self.sensor_combo.currentData()
@@ -147,6 +159,13 @@ class AnalysisPanel(QWidget):
             return
 
         n = y.size
+        if float(np.ptp(y)) == 0.0:
+            # A constant / DC / all-sentinel channel has no spectral content;
+            # after DC removal it is all zeros and argmax would report a bogus
+            # "dominant peak". Say so plainly instead.
+            self.info.setText(f"{n:,} samples · fs ≈ {fs:.1f} Hz · no variation in "
+                              "the signal (flat / constant / no-data channel).")
+            return
         x = y - np.mean(y)  # remove DC / baseline offset before transforming
 
         # ---- amplitude spectrum ----

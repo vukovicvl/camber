@@ -52,7 +52,7 @@ class ChartPanel(QWidget):
         top.addWidget(QLabel("Sensor:"))
         self.sensor_combo = QComboBox()
         self.sensor_combo.setMinimumWidth(250)
-        self.sensor_combo.currentIndexChanged.connect(self.refresh_plot)
+        self.sensor_combo.currentIndexChanged.connect(self._on_sensor_changed)
         top.addWidget(self.sensor_combo)
 
         self.live_check = QCheckBox("Live")
@@ -118,6 +118,13 @@ class ChartPanel(QWidget):
         self.refresh_plot(live=self.live_check.isChecked())
 
     # ---- live / demo toggles --------------------------------------------- #
+    def _on_sensor_changed(self, *args):
+        # Honour Live when the sensor is switched from the combo: otherwise the
+        # combo's signal calls refresh_plot with live=False, loading the whole
+        # unbounded history (the cost LIVE_WINDOW_POINTS exists to avoid) before
+        # the timer snaps back to the follow window.
+        self.refresh_plot(live=self.live_check.isChecked())
+
     def _toggle_live(self, on: bool):
         self.live_badge.setText("● LIVE" if on else "")
         if on:
@@ -125,6 +132,10 @@ class ChartPanel(QWidget):
             self.refresh_plot(live=True)
         else:
             self.live_timer.stop()
+            # A demo feed is meaningless without Live and would otherwise keep
+            # writing synthetic rows into real data — stop it too.
+            if self.demo_btn.isChecked():
+                self.demo_btn.setChecked(False)
 
     def _toggle_demo(self, on: bool):
         if on:
@@ -149,7 +160,12 @@ class ChartPanel(QWidget):
             base, metric, unit = 0.0, (sr.sensor_type if sr else "demo"), ""
         amp = max(abs(base) * 0.05, 0.5)
         value = base + amp * math.sin(time.time() * 1.5) + random.uniform(-0.3, 0.3) * amp
-        self.meas_svc.append(sensor_id, value, metric, unit, datetime.utcnow())
+        try:
+            self.meas_svc.append(sensor_id, value, metric, unit, datetime.utcnow())
+        except Exception:
+            # A transient DB error (e.g. lock contention during a large import)
+            # must not crash the timer slot; just skip this tick.
+            pass
 
     # ---- pause background work when this tab isn't visible ---------------- #
     def hideEvent(self, event):
@@ -222,7 +238,12 @@ class ChartPanel(QWidget):
                                             brush=pg.mkBrush(241, 196, 15, 20))
             warn_fill.setZValue(-10)
             self.plot.addItem(warn_fill)
-            crit_fill = pg.LinearRegionItem(values=(rule.critical_value, rule.critical_value * 1.5),
+            # Critical zone spans from the critical line up to the data's peak
+            # (thresholds are upper-bound: higher is worse). The old critical*1.5
+            # was wrong for large values (band ended below the data) and for
+            # negative thresholds.
+            crit_top = max(rule.critical_value, max(ys)) if ys else rule.critical_value
+            crit_fill = pg.LinearRegionItem(values=(rule.critical_value, crit_top),
                                             orientation="horizontal", movable=False,
                                             brush=pg.mkBrush(231, 76, 60, 20))
             crit_fill.setZValue(-10)
