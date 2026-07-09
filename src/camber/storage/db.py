@@ -1,6 +1,8 @@
 """SQLite storage with SQLAlchemy 2.x."""
 from __future__ import annotations
+import os
 from datetime import datetime
+from pathlib import Path
 from sqlalchemy import create_engine, ForeignKey, String, Float, DateTime, Integer, JSON
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, Session
 
@@ -49,6 +51,32 @@ class ThresholdRow(Base):
     warning_value: Mapped[float] = mapped_column(Float)
     critical_value: Mapped[float] = mapped_column(Float)
     unit: Mapped[str] = mapped_column(String(20))
+
+
+def default_db_path() -> str:
+    """Resolve where the application database file lives.
+
+    Priority:
+      1. ``$CAMBER_DB`` — explicit override (tests, alternate projects).
+      2. ``./camber.db`` if it already exists — keeps working with a database a
+         source checkout or older build created in the working directory.
+      3. ``%LOCALAPPDATA%\\Camber\\camber.db`` (per-user, created on demand) — the
+         correct home for an installed app.
+
+    The old behaviour passed a bare relative ``"camber.db"`` unconditionally,
+    which breaks an installed app: launched from a shortcut the working directory
+    is often read-only (e.g. Program Files), so the database can't be created.
+    """
+    override = os.environ.get("CAMBER_DB")
+    if override:
+        return override
+    legacy = Path.cwd() / "camber.db"
+    if legacy.exists():
+        return str(legacy)
+    from ..logging_setup import app_data_dir
+    d = app_data_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    return str(d / "camber.db")
 
 
 def init_db(db_path: str = "camber.db"):

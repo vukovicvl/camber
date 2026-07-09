@@ -19,9 +19,17 @@ from pathlib import Path
 _LOG = logging.getLogger("camber")
 
 
-def _intended_log_dir() -> Path:
+def app_data_dir() -> Path:
+    """Base per-user directory for Camber's data (database) and logs:
+    ``%LOCALAPPDATA%\\Camber`` on Windows, an XDG/home-based path elsewhere.
+    Shared by the log location and the default database path so both live under
+    one writable, per-user root (never inside a read-only install directory)."""
     base = os.environ.get("LOCALAPPDATA") or os.environ.get("XDG_STATE_HOME") or str(Path.home())
-    return Path(base) / "Camber" / "logs"
+    return Path(base) / "Camber"
+
+
+def _intended_log_dir() -> Path:
+    return app_data_dir() / "logs"
 
 
 def log_dir() -> Path:

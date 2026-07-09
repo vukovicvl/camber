@@ -7,7 +7,7 @@ import os
 import sys
 import threading
 from .logging_setup import setup_logging, install_excepthook, log_file
-from .storage.db import init_db
+from .storage.db import init_db, default_db_path
 from .extension_api.api import serve
 from .ui.main_window import MainWindow
 
@@ -44,11 +44,13 @@ def main():
     install_excepthook()
     _LOG.info("Starting Camber (log: %s)", logfile)
 
+    db_path = default_db_path()
+    _LOG.info("Database: %s", db_path)
     try:
-        engine = init_db("camber.db")
+        engine = init_db(db_path)
     except Exception:
-        _LOG.exception("Failed to open database 'camber.db' (cwd=%s)", os.getcwd())
-        _fatal_startup_error("Camber could not open its database (camber.db). "
+        _LOG.exception("Failed to open database at %s (cwd=%s)", db_path, os.getcwd())
+        _fatal_startup_error(f"Camber could not open its database:\n{db_path}\n\n"
                              "It may be corrupt, locked, or in a read-only folder.")
         raise
     start_api(engine)
