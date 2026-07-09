@@ -82,10 +82,10 @@ class ChartPanel(QWidget):
         self.plot.setLabel("left", "Value")
         self.plot.getAxis("bottom").setPen(pg.mkPen(COLORS["border"], width=1))
         self.plot.getAxis("left").setPen(pg.mkPen(COLORS["border"], width=1))
-        # Keep big recordings (tens of thousands of points) responsive: draw only
-        # what is in view and downsample the rest.
-        self.plot.setClipToView(True)
-        self.plot.setDownsampling(mode="peak", auto=True)
+        # NOTE: clip-to-view / downsampling are toggled per-plot in refresh_plot,
+        # not enabled globally here — they must stay OFF when per-point symbol
+        # brushes are used (pyqtgraph does not clip the brush list with the data,
+        # which raises "Number of brushes does not match number of points").
         layout.addWidget(self.plot)
 
         # Timers: one drives the live re-query, one drives the demo feed.
@@ -217,9 +217,15 @@ class ChartPanel(QWidget):
             self.plot.addItem(crit_fill)
 
         # Per-point coloured symbols are useful but slow; a full recording can be
-        # tens of thousands of points. Above a threshold, draw a plain fast line.
+        # tens of thousands of points. Above a threshold, draw a plain fast line
+        # with clip-to-view + downsampling. Below it, draw coloured symbols — but
+        # with clip/downsample OFF, since a per-point brush list is incompatible
+        # with clip-to-view (the brushes are not clipped alongside the points).
         SYMBOL_LIMIT = 4000
-        if len(xs) <= SYMBOL_LIMIT:
+        big = len(xs) > SYMBOL_LIMIT
+        self.plot.setClipToView(big)
+        self.plot.setDownsampling(mode="peak", auto=big)
+        if not big:
             brushes = []
             for v in ys:
                 if rule and v >= rule.critical_value:
